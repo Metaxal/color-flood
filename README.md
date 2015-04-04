@@ -6,9 +6,9 @@ This game has been [shown to be NP-hard](http://arxiv.org/abs/1001.4420), and is
 
 Start it with:
 ```
-$ racket -l color-flood/color-flood
+$ racket -l color-flood
 ```
-Or in DrRacket, click on `File/Open a path for require` and enter `color-flood/color-flood`. Then run the game.
+Or in DrRacket, click on `File/Open a path for require` and enter `color-flood/main.rkt`. Then run the file.
 
 
 ![screenshot](img/screenshot1.png)
