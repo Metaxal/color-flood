@@ -8,7 +8,7 @@ Start it with:
 ```
 $ racket -l color-flood
 ```
-Or in DrRacket, click on `File/Open a path for require` and enter `color-flood/main.rkt`. Then run the file.
+Or in DrRacket, click on `File/Open require path` and enter `color-flood/main.rkt`. Then run the file.
 
 
 ![screenshot](img/screenshot1.png)
