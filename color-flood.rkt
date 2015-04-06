@@ -360,7 +360,8 @@
 (define (on-char k-evt)
   (when (eq? (send k-evt get-key-code) 'release)
     (define chr (send k-evt get-key-release-code))
-    (writeln (list 'char: chr))
+    (write (list 'char: chr))
+    (newline)
     (case chr
       [(#\return)
        (for ([c n-colors])
