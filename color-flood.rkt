@@ -4,9 +4,12 @@
          bazaar/matrix
          bazaar/mutation
          bazaar/cond-let
-         bazaar/loop)
+         bazaar/loop
+         bazaar/debug)
 
-#;(random-seed 1234)
+(define seed 1428341910 #;(current-seconds))
+(displayln (list 'random-seed: seed))
+(random-seed seed)
 
 (module+ test
   (require rackunit))
@@ -14,6 +17,7 @@
 (define n-cells 22)
 
 (define color-names '("red" "blue" "darkgreen" "yellow" "violet" "turquoise" "orange"))
+(define (color-name n) (list-ref color-names n))
 (define n-colors (length color-names))
 (define colors (build-list n-colors values))
 (define n-plays 0)
@@ -146,14 +150,15 @@
 ;; colored with the specified color.
 ;; color-frontiers : alist? ; dict of (color . color-frontier-list) 
 ;; mat-used : matrix? ; must be initialized to #f
-;; -> alist? ; returns the new color-frontier, updated from color-frontiers
+;; -> alist? number?; returns the new color-frontier, updated from color-frontiers
+;; and the number of cells of the specified color that have been processed.
 (define (color-frontier1 mat color-frontiers mat-used color)
   ;; new-frontier: dict of (color . color-frontier-list) of the touched pixels
   (let loop ([frontier (dict-ref color-frontiers color)]
              [new-frontiers (dict-remove color-frontiers color)]
              [changed 0])
     (if (empty? frontier)
-        new-frontiers
+        (values new-frontiers changed)
         (let* ([point (first frontier)]
                [col (car point)]
                [row (cdr point)])
@@ -161,23 +166,38 @@
                   (matrix-ref mat-used row col))
               (loop (rest frontier) new-frontiers changed)
               (let ([c (matrix-ref mat row col)])
-                (matrix-set! mat-used row col #t)
                 (if (= color c)
-                    (loop (list* (cons (- col 1) row)
-                                 (cons col       (- row 1))
-                                 (cons col       (+ row 1))
-                                 (cons (+ col 1) row)
-                                 (rest frontier))
-                          new-frontiers
-                          (+  changed 1))
+                    (begin
+                      ; changed the matrix only for the parsed element
+                      (matrix-set! mat-used row col #t)
+                      (loop (list* (cons (- col 1) row)
+                                   (cons col       (- row 1))
+                                   (cons col       (+ row 1))
+                                   (cons (+ col 1) row)
+                                   (rest frontier))
+                            new-frontiers
+                            (+ changed 1)))
                     (loop (rest frontier)
                           (dict-update new-frontiers c
-                                       (λ(f)(cons (cons col row) f))
+                                       (λ(f)
+                                         (define key (cons col row))
+                                         (if (member key f) f (cons key f)))
                                        '())
                           changed))))))))
 
-;; Does not work correctly because we should
-;; append the frontiers of the same color at different depths??
+(define (test-frontier1 col row [frontiers #f] #:names? [names? #f])
+  (define from-color (matrix-ref mat row col))
+  (define mat-used (make-matrix (matrix-nrows mat) (matrix-ncols mat) #f))
+  (define-values (new-frontier changed)
+    (color-frontier1 mat (or frontiers (list (list from-color (cons col row))))
+                     mat-used
+                     from-color))
+  (values
+   (if names?
+       (for/list ([(k v) (in-dict new-frontier)]) (cons (list-ref color-names k) v))
+       new-frontier)
+   changed))
+
 (define (color-frontier mat col row depth [forbid-colors '()]
                        #:print? [print? #f])
   ; One matrix copy per depth
@@ -191,28 +211,34 @@
              [forbid-colors forbid-colors])
     (define mat-used2 (vector-ref dmat (- d 1)))
     (matrix-copy! mat-used2 mat-used)
+    #;(disp-vars color-frontiers from-color)
     (define-values (new-color-frontiers changed)
-      (color-frontier1 mat color-frontiers mat-used from-color))
-    (if (or (<= d 1))
+      (color-frontier1 mat color-frontiers mat-used2 from-color))
+    #;(disp-vars new-color-frontiers changed)
+    (if (or (<= d 1) #;(= changed 0)) ; is (= changed 0) possible?
         changed
         (let ()
           (define-values (best-color best-score)
-            (for/best > ([color (remove* forbid-colors (dict-keys new-color-frontiers))])
-                      (define front (dict-ref new-color-frontiers color))
-                      (define score (loop (- d 1) color
-                                          (dict-remove new-color-frontiers from-color)
-                                          mat-used2 (list color)))
-                      (when print?
-                        (displayln (string-append
-                                    (make-string (* 2 (- depth d)) #\space)
-                                    "color:" (~a (list-ref color-names color) #:min-width 13)
-                                    "  score:" (~a score))))
-                      (values color score)))
+            (let ([found-colors (remove* forbid-colors (dict-keys new-color-frontiers))])
+              (if (empty? found-colors)
+                  (values (first (remove* forbid-colors colors)) 0) ; todo: list-choose
+                  (for/best > ([color found-colors])
+                            (define front (dict-ref new-color-frontiers color))
+                            (define score (loop (- d 1) color
+                                                (dict-remove new-color-frontiers from-color)
+                                                mat-used2 (list from-color)))
+                            (when print?
+                              (displayln (string-append
+                                          (make-string (* 2 (- depth d)) #\space)
+                                          "color:" (~a (list-ref color-names color) #:min-width 13)
+                                          "  score:" (~a score))))
+                            (values color score)))))
           (when print?
             (displayln (string-append
                         (make-string (* 2 (- depth d)) #\space)
                         "best :" (~a (list-ref color-names best-color) #:min-width 13)
-                        "  score:" (~a best-score))))
+                        "  score:" (~a best-score)
+                        "  changed:" (~a changed))))
           (if (= d depth)
               best-color
               (+ changed best-score))))))
@@ -256,7 +282,9 @@
     (mat-flood! mat player1-col player1-row to-color)
     ; Automatic opponent
     (mat-flood! mat player2-col player2-row
-                (best-color/DP mat player2-col player2-row depth
+                (color-frontier mat player2-col player2-row (+ depth 1)
+                                (forbidden-colors mat))
+                #;(best-color/DP mat player2-col player2-row depth
                                (forbidden-colors mat))
                 #;(best-color mat player2-col player2-row depth
                             (forbidden-colors mat)))
