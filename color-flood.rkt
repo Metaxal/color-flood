@@ -3,7 +3,8 @@
 (require bazaar/gui/board
          bazaar/matrix
          bazaar/mutation
-         bazaar/cond-let)
+         bazaar/cond-let
+         bazaar/loop)
 
 #;(random-seed 1234)
 
@@ -30,7 +31,7 @@
 (define player2-row (player-row player2))
 
 (define (player-color mat pl)
-  (matrix-ref mat (player-col pl) (player-row pl)))
+  (matrix-ref mat (player-row pl) (player-col pl)))
 
 (define (forbidden-colors mat)
   (list (player-color mat player1)
@@ -57,12 +58,12 @@
 ;; Returns the number of cells painted with the same color as the one in (col row)
 ;; that can be reached for (col row).
 (define (mat-score mat col row)
-  (define from-color (matrix-ref mat col row))
+  (define from-color (matrix-ref mat row col))
   (define counted? (make-hash))
   (let loop ([col col] [row row])
     (define key (cons col row))
     (cond [(and (mat-in-bounds? mat col row)
-                (= from-color (matrix-ref mat col row))
+                (= from-color (matrix-ref mat row col))
                 (not (hash-ref counted? key #f)))
            (hash-set! counted? key #t)
            (+ 1
@@ -73,14 +74,14 @@
           [else 0])))
 
 (define (mat-flood! mat col row to-color)
-  (define from-color (matrix-ref mat col row))
+  (define from-color (matrix-ref mat row col))
   (define n-tests 0)
   (when (not (= to-color from-color))
     (let loop ([col col] [row row])
       (set! n-tests (+ 1 n-tests))
       (when (and (mat-in-bounds? mat col row)
-                 (= from-color (matrix-ref mat col row)))
-        (matrix-set! mat col row to-color)
+                 (= from-color (matrix-ref mat row col)))
+        (matrix-set! mat row col to-color)
         (loop col (+ row 1))
         (loop col (- row 1))
         (loop (+ col 1) row)
@@ -90,13 +91,13 @@
 
 ;; Returns the number of cells that can be captured by flooding
 (define (test-flood mat col row to-color)
-  (define from-color (matrix-ref mat col row))
+  (define from-color (matrix-ref mat row col))
   (define counted? (make-hash))
   (if (= to-color from-color)
       0
       (let loop ([col col] [row row] [count? #f])
         (cond-let [(not (mat-in-bounds? mat col row)) 0]
-                  #:let* ([c    (matrix-ref mat col row)]
+                  #:let* ([c    (matrix-ref mat row col)]
                           [c=to (= c to-color)]
                           [key  (cons col row)])
                   [(and (or c=to (= c from-color))
@@ -112,7 +113,7 @@
 
 ;; Returns the final score after playing a sequence of moves (to-colors).
 (define (test-flood* mat col row to-colors)
-  (define from-color (matrix-ref mat col row))
+  (define from-color (matrix-ref mat row col))
   (define counted? (make-hash))
   (if (= (first to-colors) from-color)
       0
@@ -122,7 +123,7 @@
         (cond-let [(or (not (mat-in-bounds? mat col row))
                        (hash-ref counted? key #f))
                    0]
-                  #:let* ([c (matrix-ref mat col row)]
+                  #:let* ([c (matrix-ref mat row col)]
                           [to-color (if (empty? to-colors) -1 (first to-colors))]
                           [c=to (= c to-color)]
                           [next-from-color (if c=to to-color from-color)]
@@ -141,45 +142,113 @@
 
 ;; From starting positions (the current frontier), returns the new frontier
 ;; of cells that have not yet been used.
-(define (color-frontier mat frontier-dict used-dict color)
-  (define changed 0)
-  (for ([key (in-list (dict-keys frontier-dict))])
-    (define col (car key))
-    (define row (cdr key))
-    (define c (matrix-ref mat col row))
-    (when (= c color)
-      (dict-set! used-dict key #t)
-      (dict-remove! frontier-dict key)
-      (++ changed)
-      (for ([col2 (list (- col 1)  col        col        (+ col 1))]
-            [row2 (list row        (- row 1)  (+ row 1)  row)])
-        (define key2 (cons col2 row2))
-        (when (and (mat-in-bounds? mat col2 row2)
-                   (not (dict-ref used-dict key2 #f)))
-          (dict-set! frontier-dict key2 #t)))))
-  changed)
+;; The value associated with from-color is not a list but the number of pixels
+;; colored with the specified color.
+;; color-frontiers : alist? ; dict of (color . color-frontier-list) 
+;; mat-used : matrix? ; must be initialized to #f
+;; -> alist? ; returns the new color-frontier, updated from color-frontiers
+(define (color-frontier1 mat color-frontiers mat-used color)
+  ;; new-frontier: dict of (color . color-frontier-list) of the touched pixels
+  (let loop ([frontier (dict-ref color-frontiers color)]
+             [new-frontiers (dict-remove color-frontiers color)]
+             [changed 0])
+    (if (empty? frontier)
+        new-frontiers
+        (let* ([point (first frontier)]
+               [col (car point)]
+               [row (cdr point)])
+          (if (or (not (mat-in-bounds? mat col row))
+                  (matrix-ref mat-used row col))
+              (loop (rest frontier) new-frontiers changed)
+              (let ([c (matrix-ref mat row col)])
+                (matrix-set! mat-used row col #t)
+                (if (= color c)
+                    (loop (list* (cons (- col 1) row)
+                                 (cons col       (- row 1))
+                                 (cons col       (+ row 1))
+                                 (cons (+ col 1) row)
+                                 (rest frontier))
+                          new-frontiers
+                          (+  changed 1))
+                    (loop (rest frontier)
+                          (dict-update new-frontiers c
+                                       (λ(f)(cons (cons col row) f))
+                                       '())
+                          changed))))))))
 
-#;
-(define (test-flood* mat col row to-colors)
-  (define front (make-hash `(((,col . ,row) . #t))))
-  (define used (make-hash))
-    (for ([color (cons (matrix-ref mat col row) to-colors)])
-      (let loop ()
-        (when (> (color-frontier mat front used color) 0)
-          (loop))))
-  #;(values front used)
-  (dict-count used))
+;; Does not work correctly because we should
+;; append the frontiers of the same color at different depths??
+(define (color-frontier mat col row depth [forbid-colors '()]
+                       #:print? [print? #f])
+  ; One matrix copy per depth
+  (define dmat (build-vector depth (λ(i)(make-matrix (matrix-nrows mat) (matrix-ncols mat) #f))))
+  (define mat-used (make-matrix (matrix-nrows mat) (matrix-ncols mat) #f))
+  (define from-color (matrix-ref mat row col))
+  (let loop ([d depth]
+             [from-color from-color]
+             [color-frontiers (list (list from-color (cons col row)))]
+             [mat-used mat-used]
+             [forbid-colors forbid-colors])
+    (define mat-used2 (vector-ref dmat (- d 1)))
+    (matrix-copy! mat-used2 mat-used)
+    (define-values (new-color-frontiers changed)
+      (color-frontier1 mat color-frontiers mat-used from-color))
+    (if (or (<= d 1))
+        changed
+        (let ()
+          (define-values (best-color best-score)
+            (for/best > ([color (remove* forbid-colors (dict-keys new-color-frontiers))])
+                      (define front (dict-ref new-color-frontiers color))
+                      (define score (loop (- d 1) color
+                                          (dict-remove new-color-frontiers from-color)
+                                          mat-used2 (list color)))
+                      (when print?
+                        (displayln (string-append
+                                    (make-string (* 2 (- depth d)) #\space)
+                                    "color:" (~a (list-ref color-names color) #:min-width 13)
+                                    "  score:" (~a score))))
+                      (values color score)))
+          (when print?
+            (displayln (string-append
+                        (make-string (* 2 (- depth d)) #\space)
+                        "best :" (~a (list-ref color-names best-color) #:min-width 13)
+                        "  score:" (~a best-score))))
+          (if (= d depth)
+              best-color
+              (+ changed best-score))))))
 
-#;(define mat2 #f)
-;; Plays a sequence of floods and returns the final score
-#;
-(define (test-flood* mat col row to-colors)
-  (if mat2
-      (matrix-copy! mat2 mat)
-      (set! mat2 (matrix-copy mat)))
-  (for ([to-color to-colors])
-    (mat-flood! mat2 col row to-color))
-  (mat-score mat2 col row))
+;; Dynamic programming version to find the best first color to play
+;; in the sequence of depth colors
+;; forbid-colors: list of colors to forbid for the first move of the sequence
+;; TODO: min-max algorithm
+(define (best-color/DP mat col row depth [forbid-colors '()]
+                       #:print? [print? #f])
+  ; One matrix copy per depth
+  (define dmat (build-vector depth (λ(i)(make-matrix (matrix-nrows mat) (matrix-ncols mat)))))
+  (let loop ([d depth] [mat mat] [forbid-colors forbid-colors])
+    (define-values (best-color best-score)
+      (for/best > ([color (remove* forbid-colors colors)])
+                (define mat2 (vector-ref dmat (- d 1)))
+                (matrix-copy! mat2 mat)
+                (mat-flood! mat2 col row color)
+                (define score
+                  (if (<= d 1)
+                      (mat-score mat2 col row)
+                      (loop (- d 1) mat2 (list color))))
+                (when print?
+                  (displayln (string-append
+                              (make-string (* 2 (- depth d)) #\space)
+                              "color:" (~a (list-ref color-names color) #:min-width 13)
+                              "  score:" (~a score))))
+                (values color score)))
+    (when print?
+      (displayln (string-append
+                  (make-string (* 2 (- depth d)) #\space)
+                  " best:" (~a (list-ref color-names best-color) #:min-width 13)
+                  "  score:" (~a best-score))))
+    (if (= d depth)
+        best-color
+        best-score)))
 
 
 (define (play-color to-color depth)
@@ -187,7 +256,9 @@
     (mat-flood! mat player1-col player1-row to-color)
     ; Automatic opponent
     (mat-flood! mat player2-col player2-row
-                (best-color mat player2-col player2-row depth
+                (best-color/DP mat player2-col player2-row depth
+                               (forbidden-colors mat))
+                #;(best-color mat player2-col player2-row depth
                             (forbidden-colors mat)))
     (++ n-plays)
     (update-scores! player1 player2)))
@@ -224,6 +295,7 @@
   (check-equal? (all-seqs '(a b c) 2 #f)
                 '((b a) (c a) (a b) (c b) (a c) (b c))))
 
+;; TODO: Dynamic programming to make it more efficient
 (define (best-color mat col row depth [forbid-colors '()])
   (first (argmax 
           (λ(l)(test-flood* mat col row l))
