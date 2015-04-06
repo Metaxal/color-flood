@@ -7,7 +7,7 @@
          bazaar/loop
          bazaar/debug)
 
-(define seed 1428341910 #;(current-seconds))
+(define seed #;1428341910 (current-seconds))
 (displayln (list 'random-seed: seed))
 (random-seed seed)
 
